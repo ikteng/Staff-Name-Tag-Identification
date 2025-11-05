@@ -10,7 +10,7 @@ from tqdm import tqdm
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 dataset_path = "dataset"   # should contain 0/ and 1/ subfolders
 batch_size = 16
-num_epochs = 50
+num_epochs = 30
 model_path = "staff_resnet18.pth"
 patience = 5
 

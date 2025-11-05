@@ -10,8 +10,8 @@ output_dir = "to_label"
 os.makedirs(output_dir, exist_ok=True)
 
 # --- Load Models ---
-yolo = YOLO("yolov8m.pt") # people detection
-pose = YOLO("yolov8n-pose.pt") # pose estimation
+yolo = YOLO("yolov8m.pt")      # Person detection
+pose = YOLO("yolov8n-pose.pt") # Pose estimation
 
 # --- Video Setup ---
 cap = cv2.VideoCapture(video_path)
@@ -28,52 +28,55 @@ crop_idx = 0
 for _ in tqdm(range(frame_count)):
     ret, frame = cap.read()
     if not ret:
-        break # Stop if there are no more frames
-    
+        break  # Stop if there are no more frames
+
+    # --- Split into top and bottom halves ---
+    top_half = frame[:height // 2, :]
+    bottom_half = frame[height // 2:, :]
+    bottom_half_flipped = cv2.flip(bottom_half, 0)  # Flip bottom half vertically
+    combined = np.vstack((top_half, bottom_half_flipped))
+
     # --- Step 1: Person Detection ---
-    # Run YOLO person detector on the frame
-    results = yolo(frame, verbose=False)
+    results = yolo(combined, verbose=False)
     for r in results:
         for box in r.boxes:
             if int(box.cls) != 0 or float(box.conf) < 0.5:
-                continue # Skip if the detection is not a person
-            
-            # Extract bounding box coordinates for the detected person
+                continue  # Skip if not a person
+
+            # Extract bounding box coordinates
             x1, y1, x2, y2 = map(int, box.xyxy[0])
-            person_crop = frame[y1:y2, x1:x2]
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(width, x2), min(height, y2)
+
+            # Crop the detected person from the combined frame
+            person_crop = combined[y1:y2, x1:x2]
             if person_crop.size == 0:
-                continue # Skip invalid or empty crops
-            
+                continue  # Skip invalid crops
+
             # --- Step 2: Pose Estimation ---
-            # Use YOLO-Pose to detect keypoints within the person crop
             pose_res = pose(person_crop, verbose=False)
             for pr in pose_res:
                 if pr.keypoints is None or len(pr.keypoints.xy) == 0:
-                    continue # Skip if no keypoints were found
-                
-                # Extract keypoint coordinates and confidence scores
+                    continue
+
                 keypoints = pr.keypoints.xy[0].cpu().numpy()
                 conf = pr.keypoints.conf[0].cpu().numpy()
 
                 if conf[5] < 0.3 or conf[6] < 0.3:
-                    continue # Filter out poor pose quality: require both shoulders
+                    continue  # Require both shoulders
 
                 # Shoulders + hips define upper-body box
                 left_shoulder, right_shoulder = keypoints[5], keypoints[6]
                 left_hip, right_hip = keypoints[11], keypoints[12]
 
-                # Compute bounding box corners (in frame coordinates)
+                # Compute bounding box in frame coordinates
                 x_min = int(min(left_shoulder[0], right_shoulder[0])) + x1
                 x_max = int(max(left_shoulder[0], right_shoulder[0])) + x1
                 y_min = int(min(left_shoulder[1], right_shoulder[1])) + y1
-                y_max = int(max(left_hip[1], right_hip[1])) + y1 
-                
-                # If hips are confidently detected, use them as lower bound
                 if conf[11] > 0.3 or conf[12] > 0.3:
                     y_max = int(max(left_hip[1], right_hip[1])) + y1
-                # Otherwise, approximate the torso height to 60% of the detected person height
                 else:
-                    y_max = int(y1 + (y2 - y1) * 0.6)
+                    y_max = int(y1 + (y2 - y1) * 0.6)  # Approximate torso height
 
                 # Add margin
                 margin_x = int((x_max - x_min) * 0.2)
@@ -81,21 +84,21 @@ for _ in tqdm(range(frame_count)):
                 x_min, x_max = max(0, x_min - margin_x), min(width, x_max + margin_x)
                 y_min, y_max = max(0, y_min - margin_y), min(height, y_max + margin_y)
 
-                # Extract upper-body region from original frame
-                crop = frame[y_min:y_max, x_min:x_max]
+                # Extract upper-body crop from combined frame
+                crop = combined[y_min:y_max, x_min:x_max]
                 if crop.size == 0:
-                    continue # Skip if crop failed
+                    continue
 
                 # Skip tiny boxes
-                if crop.shape[1] < 30 or crop.shape[0] < 30: # width, height
+                if crop.shape[1] < 30 or crop.shape[0] < 30:
                     continue
-                
+
                 # Save the crop
                 save_path = os.path.join(output_dir, f"crop_{frame_idx:05d}_{crop_idx:03d}.jpg")
                 cv2.imwrite(save_path, crop)
-                crop_idx += 1 # Increment saved crop counter
+                crop_idx += 1
 
-    frame_idx += 1 # Move to next frame
+    frame_idx += 1
 
 cap.release()
 print(f"\n✅ Done! Saved {crop_idx} upper-body crops to '{output_dir}/'")
