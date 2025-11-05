@@ -5,3 +5,5 @@ pandas
 ultralytics
 scikit-learn
 tqdm
+torch
+torchvision
